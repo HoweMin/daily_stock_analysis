@@ -4496,7 +4496,7 @@ class SearchService:
                     ),
                     'desc': '公司公告',
                     'tavily_topic': 'news',
-                    'strict_freshness': True,
+                    'strict_freshness': False,
                 },
                 {
                     'name': 'risk_check',
