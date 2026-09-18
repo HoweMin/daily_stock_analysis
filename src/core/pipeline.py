@@ -701,7 +701,7 @@ class StockAnalysisPipeline:
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=("" if is_index else code),
                     stock_name=stock_name,
-                    max_searches=5
+                    max_searches=3
                 )
 
                 # 格式化情报报告
