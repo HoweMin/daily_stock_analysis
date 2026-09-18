@@ -19,6 +19,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.utils import parsedate_to_datetime
 from typing import List, Dict, Any, Optional, Tuple
 from itertools import cycle
@@ -4373,12 +4374,20 @@ class SearchService:
         max_searches: int = 3
     ) -> Dict[str, SearchResponse]:
         """
-        多维度情报搜索（同时使用多个引擎、多个维度）
-        
-        搜索维度：
-        1. 最新消息 - 近期新闻动态
-        2. 风险排查 - 减持、处罚、利空
-        3. 业绩预期 - 年报预告、业绩快报
+        多维度情报搜索
+
+        A股搜索策略：
+        高频（日常）：
+        1. 最新消息
+        2. 公司公告
+        3. 风险排查
+
+        低频（周五）：
+        4. 机构分析
+        5. 业绩预期
+
+        预留：
+        6. 行业分析
         
         Args:
             stock_code: 股票代码
@@ -4394,6 +4403,25 @@ class SearchService:
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
 
+        # A股情报搜索频率：
+        # 周一到周四：3个高频维度
+        # 周五：增加机构分析、业绩预期，共5个维度
+        if not is_foreign:
+            cn_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+
+            if cn_now.weekday() == 4:  # 周五
+                max_searches = max(max_searches, 5)
+                logger.info(
+                    "[情报频率] 周五周度深搜，max_searches=%s",
+                    max_searches,
+                )
+            else:
+                max_searches = min(max_searches, 3)
+                logger.info(
+                    "[情报频率] 日常快搜，max_searches=%s",
+                    max_searches,
+                )
+                
         if is_foreign:
             # Issue #2026: Foreign-ticker English alias resolution from the
             # single source of truth (STOCK_ENGLISH_NAME_MAP in
@@ -4451,6 +4479,7 @@ class SearchService:
             ]
         else:
             search_dimensions = [
+                # ===== 高频：每天查询 =====
                 {
                     'name': 'latest_news',
                     'query': f"{stock_name} {stock_code} 最新 新闻 重大 事件",
@@ -4459,6 +4488,30 @@ class SearchService:
                     'strict_freshness': True,
                 },
                 {
+                    'name': 'announcements',
+                    'query': (
+                        f"{stock_name} {stock_code} 公告 指数调整 成分变化"
+                        if is_index_etf else
+                        f"{stock_name} {stock_code} 公司公告 重要公告 上交所 深交所 cninfo"
+                    ),
+                    'desc': '公司公告',
+                    'tavily_topic': 'news',
+                    'strict_freshness': True,
+                },
+                {
+                    'name': 'risk_check',
+                    'query': (
+                        f"{stock_name} 指数走势 跟踪误差 净值 表现"
+                        if is_index_etf else
+                        f"{stock_name} 减持 处罚 违规 诉讼 利空 风险"
+                    ),
+                    'desc': '风险排查',
+                    'tavily_topic': None if is_index_etf else 'news',
+                    'strict_freshness': not is_index_etf,
+                },
+
+                # ===== 低频：周五额外查询 =====
+                {
                     'name': 'market_analysis',
                     'query': f"{stock_name} 研报 目标价 评级 深度分析",
                     'desc': '机构分析',
@@ -4466,40 +4519,24 @@ class SearchService:
                     'strict_freshness': False,
                 },
                 {
-                    'name': 'risk_check',
-                    'query': (
-                        f"{stock_name} 指数走势 跟踪误差 净值 表现"
-                        if is_index_etf else f"{stock_name} 减持 处罚 违规 诉讼 利空 风险"
-                    ),
-                    'desc': '风险排查',
-                    'tavily_topic': None if is_index_etf else 'news',
-                    'strict_freshness': not is_index_etf,
-                },
-                {
-                    'name': 'announcements',
-                    'query': (
-                        f"{stock_name} {stock_code} 公告 指数调整 成分变化"
-                        if is_index_etf else f"{stock_name} {stock_code} 公司公告 重要公告 上交所 深交所 cninfo"
-                    ),
-                    'desc': '公司公告',
-                    'tavily_topic': 'news',
-                    'strict_freshness': True,
-                },
-                {
                     'name': 'earnings',
                     'query': (
                         f"{stock_name} 指数成分 净值 跟踪表现"
-                        if is_index_etf else f"{stock_name} 业绩预告 财报 营收 净利润 同比增长"
+                        if is_index_etf else
+                        f"{stock_name} 业绩预告 财报 营收 净利润 同比增长"
                     ),
                     'desc': '业绩预期',
                     'tavily_topic': None,
                     'strict_freshness': False,
                 },
+
+                # ===== 暂时关闭：只有 max_searches >= 6 才会执行 =====
                 {
                     'name': 'industry',
                     'query': (
                         f"{stock_name} 指数成分股 行业配置 权重"
-                        if is_index_etf else f"{stock_name} 所在行业 竞争对手 市场份额 行业前景"
+                        if is_index_etf else
+                        f"{stock_name} 所在行业 竞争对手 市场份额 行业前景"
                     ),
                     'desc': '行业分析',
                     'tavily_topic': None,
